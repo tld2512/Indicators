@@ -1,0 +1,134 @@
+//@version=6
+indicator("Futures Flow Setup (CMF+MFI+OBV + OI/Funding) — v6", overlay=false)
+
+// ========= Inputs =========
+lenCMF  = input.int(20, "CMF length")
+lenMFI  = input.int(14, "MFI length")
+lenEMA  = input.int(50, "Trend EMA")
+tfFast  = input.timeframe("240", "MTF CMF (Fast) – 4H")
+tfSlow  = input.timeframe("D",   "MTF CMF (Slow) – 1D")
+zLenOBV = input.int(100, "OBV z-score length", minval=10)
+
+// ---- OI & Funding (bạn chọn symbol đúng trong TradingView) ----
+oiSymbol      = input.symbol("", "Open Interest symbol (optional)")
+fundingSymbol = input.symbol("", "Funding Rate symbol (optional)")
+oiTf          = input.timeframe("60", "OI/Funding timeframe (e.g. 60, 240, D)")
+fundPosAlert  = input.float(0.02, "Funding +threshold (e.g. +0.02 = +2%)", step=0.0001)
+fundNegAlert  = input.float(-0.02,"Funding -threshold (e.g. -0.02 = -2%)", step=0.0001)
+
+// ========= CMF (Chaikin Money Flow) – custom =========
+cmf_calc(_h, _l, _c, _v, _n) =>
+    denom = math.max(_h - _l, 1e-10)
+    mfm   = ((_c - _l) - (_h - _c)) / denom
+    mfv   = mfm * _v
+    sum_mfv = ta.sma(mfv, _n) * _n
+    sum_vol = ta.sma(_v,  _n) * _n
+    sum_vol != 0 ? (sum_mfv / sum_vol) : 0.0
+
+cmf_cur  = cmf_calc(high, low, close, volume, lenCMF)
+cmf_fast = request.security(syminfo.tickerid, tfFast, cmf_calc(high, low, close, volume, lenCMF))
+cmf_slow = request.security(syminfo.tickerid, tfSlow, cmf_calc(high, low, close, volume, lenCMF))
+
+// ========= MFI – custom =========
+mfi_calc(_h, _l, _c, _v, _n) =>
+    tp   = (_h + _l + _c) / 3.0
+    tp1  = nz(tp[1], tp)
+    pos  = tp > tp1  ? (_v * tp) : 0.0
+    neg  = tp < tp1  ? (_v * tp) : 0.0
+    posN = ta.sma(pos, _n) * _n
+    negN = ta.sma(neg, _n) * _n
+    rs   = negN == 0 ? 100.0 : posN / negN
+    100.0 - (100.0 / (1.0 + rs))
+
+mfi_cur = mfi_calc(high, low, close, volume, lenMFI)
+
+// ========= OBV – custom + z-score =========
+var float obv = 0.0
+obv += close > close[1] ?  volume :
+       close < close[1] ? -volume : 0
+obv_mean  = ta.sma(obv, zLenOBV)
+obv_stdev = ta.stdev(obv, zLenOBV)
+obv_z     = obv_stdev != 0 ? (obv - obv_mean) / obv_stdev : 0.0
+
+// ========= Trend filter =========
+ema_trend   = ta.ema(close, lenEMA)
+in_uptrend  = close > ema_trend
+in_downtrend= close < ema_trend
+
+// ========= Futures data: OI + Funding =========
+// Nhiều nguồn OI/Funding xuất dữ liệu 1 giá (close). request.security sẽ lấy close mặc định.
+oi_raw      = oiSymbol == ""      ? na : request.security(oiSymbol,      oiTf, close)
+funding_raw = fundingSymbol == "" ? na : request.security(fundingSymbol, oiTf, close)
+
+// Chuẩn hóa OI qua z-score để hiển thị cùng panel
+oi_mean  = na(oi_raw) ? na : ta.sma(oi_raw, 100)
+oi_sd    = na(oi_raw) ? na : ta.stdev(oi_raw, 100)
+oi_z     = na(oi_raw) or oi_sd == 0 ? na : (oi_raw - oi_mean) / oi_sd
+
+// ========= Signals =========
+longBias  = (cmf_cur > 0) and (cmf_fast > 0) and (cmf_slow > 0) and (mfi_cur > 50) and (obv_z > 0) and in_uptrend
+shortBias = (cmf_cur < 0) and (cmf_fast < 0) and (cmf_slow < 0) and (mfi_cur < 50) and (obv_z < 0) and in_downtrend
+
+exitLong  = (mfi_cur > 80) or (cmf_cur < 0) or (close < ema_trend)
+exitShort = (mfi_cur < 20) or (cmf_cur > 0) or (close > ema_trend)
+
+// ========= Plots =========
+hline(0.0,  "Zero",   color=color.gray, linestyle=hline.style_dotted)
+hline(80.0, "MFI 80", color=color.new(color.red,   70))
+hline(20.0, "MFI 20", color=color.new(color.teal,  70))
+hline(50.0, "MFI 50", color=color.new(color.orange,80))
+
+plot(cmf_cur,  "CMF (cur)", color=color.new(color.lime,   0), linewidth=2)
+plot(cmf_fast, "CMF 4H",    color=color.new(color.blue,  20), linewidth=2)
+plot(cmf_slow, "CMF 1D",    color=color.new(color.purple,20), linewidth=2)
+plot(mfi_cur,  "MFI",       color=color.new(color.orange, 0))
+plot(obv_z,    "OBV z",     color=color.new(color.yellow, 0))
+
+// OI & Funding plots (nếu có)
+plot(oi_z,       "OI z (norm.)", color=color.new(color.aqua, 0))
+plot(funding_raw,"Funding Rate", color=color.new(color.fuchsia, 0))
+hline(fundPosAlert, "Funding +th", color=color.new(color.fuchsia,70))
+hline(fundNegAlert, "Funding -th", color=color.new(color.fuchsia,70))
+
+// Nền bias
+bgcolor(longBias  ? color.new(color.lime, 85) : na)
+bgcolor(shortBias ? color.new(color.red,  85) : na)
+
+// Markers
+plotshape(longBias,  title="LONG bias",  style=shape.triangleup,   location=location.bottom, color=color.lime, size=size.tiny, text="LONG")
+plotshape(shortBias, title="SHORT bias", style=shape.triangledown, location=location.top,    color=color.red,  size=size.tiny, text="SHORT")
+
+// ========= Alerts =========
+alertcondition(longBias,  title=" Long Bias",  message=": Long bias ON (Flow+Trend agree)")
+alertcondition(shortBias, title=" Short Bias", message=": Short bias ON (Flow+Trend agree)")
+alertcondition(exitLong,  title=" Exit Long",  message=": Exit Long conditions met")
+alertcondition(exitShort, title=" Exit Short", message=": Exit Short conditions met")
+// OI/Funding alerts
+oiRising = oi_z > 0 and ta.rising(oi_z, 3)
+alertcondition(oiRising,        title="OI rising (z>0)", message="OI rising: new futures money flowing in")
+fundingHot = not na(funding_raw) and funding_raw > fundPosAlert
+fundingCold= not na(funding_raw) and funding_raw < fundNegAlert
+alertcondition(fundingHot,      title="Funding too positive", message="Funding > +threshold (crowded longs)")
+alertcondition(fundingCold,     title="Funding too negative", message="Funding < -threshold (crowded shorts)")
+
+// ========= Mini Dashboard =========
+var table dash = table.new(position.top_right, 2, 8, border_width=1)
+setCell(r, c, txt, col) =>
+    table.cell(dash, c, r, txt, text_color=color.black, bgcolor=color.new(col, 0))
+
+setCell(0,0,"CMF(cur)", color.white)
+setCell(0,1, str.tostring(cmf_cur,  format.mintick), cmf_cur>0?color.lime:color.red)
+setCell(1,0,"CMF(4H)",  color.white)
+setCell(1,1, str.tostring(cmf_fast, format.mintick), cmf_fast>0?color.lime:color.red)
+setCell(2,0,"CMF(1D)",  color.white)
+setCell(2,1, str.tostring(cmf_slow, format.mintick), cmf_slow>0?color.lime:color.red)
+setCell(3,0,"MFI",      color.white)
+setCell(3,1, str.tostring(mfi_cur,  format.mintick), mfi_cur>=50?color.lime:color.red)
+setCell(4,0,"OBV z",    color.white)
+setCell(4,1, str.tostring(obv_z,    format.mintick), obv_z>=0?color.lime:color.red)
+setCell(5,0,"Trend EMA",color.white)
+setCell(5,1, in_uptrend?"UP":"DOWN", in_uptrend?color.lime:color.red)
+setCell(6,0,"OI z",     color.white)
+setCell(6,1, oiSymbol==""? "n/a" : str.tostring(oi_z, format.mintick), na(oi_z)?color.gray:(oi_z>=0?color.lime:color.red))
+setCell(7,0,"Funding",  color.white)
+setCell(7,1, fundingSymbol==""? "n/a" : str.tostring(funding_raw, format.mintick), na(funding_raw)?color.gray:(funding_raw>=0?color.lime:color.red))
