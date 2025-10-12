@@ -1,5 +1,5 @@
 //@version=6
-indicator("ENA Futures Flow Setup (Flow + OI/Funding + Warnings) — v6", overlay=false)
+indicator("Futures Flow Setup (Flow + OI/Funding + Warnings) — v6", overlay=true)
 
 // ========= Inputs =========
 lenCMF  = input.int(20, "CMF length")
