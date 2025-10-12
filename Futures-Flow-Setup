@@ -1,5 +1,5 @@
 //@version=6
-indicator("Futures Flow Setup (Flow + OI/Funding + Warnings) — v6", overlay=true)
+indicator("ENA Futures All-in-One (Overlay + Dashboard + Warnings, lane fix) — v6", overlay=true)
 
 // ========= Inputs =========
 lenCMF  = input.int(20, "CMF length")
@@ -9,21 +9,21 @@ tfFast  = input.timeframe("240", "MTF CMF (Fast) – 4H")
 tfSlow  = input.timeframe("D",   "MTF CMF (Slow) – 1D")
 zLenOBV = input.int(100, "OBV z-score length", minval=10)
 
-// OI & Funding symbols (tùy nguồn dữ liệu trên TV)
-oiSymbol      = input.symbol("", "Open Interest symbol (optional)")
-fundingSymbol = input.symbol("", "Funding Rate symbol (optional)")
+// OI & Funding (nhập symbol nếu có nguồn dữ liệu)
+oiSymbol      = input.symbol("", "Open Interest symbol (optional)")    // ví dụ ENA là: BINANCE:ENAUSDT.P
+fundingSymbol = input.symbol("", "Funding Rate symbol (optional)")     // ví dụ ENA là: BINANCE:ENAUSDT.P
 oiTf          = input.timeframe("60", "OI/Funding timeframe (e.g. 60, 240, D)")
-fundPosAlert  = input.float(0.02, "Funding +threshold (e.g. +0.02 = +2%)", step=0.0001)
-fundNegAlert  = input.float(-0.02,"Funding -threshold (e.g. -0.02 = -2%)", step=0.0001)
+fundPosAlert  = input.float(0.02, "Funding +threshold (+2% = 0.02)", step=0.0001)
+fundNegAlert  = input.float(-0.02,"Funding -threshold (-2% = -0.02)", step=0.0001)
 
-// Warnings
-showWarnings  = input.bool(true, "Show warning labels")
-warnOnFunding = input.bool(true, "Warn on Funding extremes")
-warnOnCMFflip = input.bool(true, "Warn on CMF flip (flow reversals)")
-warnOnMFIext  = input.bool(true, "Warn on MFI extremes (80/20)")
-warnOnOBVflip = input.bool(true, "Warn on OBV z flip")
+// Warnings toggles
+showExits     = input.bool(true,  "Show Exit signals")
+showFunding   = input.bool(true,  "Warn Funding extremes")
+showCMFflip   = input.bool(true,  "Warn CMF flip")
+showMFIext    = input.bool(true,  "Warn MFI extremes")
+showOBVflip   = input.bool(true,  "Warn OBV z flip")
 
-// ========= CMF (custom) =========
+// ========= Helpers: CMF/MFI/OBV (custom) =========
 cmf_calc(_h, _l, _c, _v, _n) =>
     denom = math.max(_h - _l, 1e-10)
     mfm   = ((_c - _l) - (_h - _c)) / denom
@@ -32,11 +32,6 @@ cmf_calc(_h, _l, _c, _v, _n) =>
     sum_vol = ta.sma(_v,  _n) * _n
     sum_vol != 0 ? (sum_mfv / sum_vol) : 0.0
 
-cmf_cur  = cmf_calc(high, low, close, volume, lenCMF)
-cmf_fast = request.security(syminfo.tickerid, tfFast, cmf_calc(high, low, close, volume, lenCMF))
-cmf_slow = request.security(syminfo.tickerid, tfSlow, cmf_calc(high, low, close, volume, lenCMF))
-
-// ========= MFI (custom) =========
 mfi_calc(_h, _l, _c, _v, _n) =>
     tp   = (_h + _l + _c) / 3.0
     tp1  = nz(tp[1], tp)
@@ -47,9 +42,7 @@ mfi_calc(_h, _l, _c, _v, _n) =>
     rs   = negN == 0 ? 100.0 : posN / negN
     100.0 - (100.0 / (1.0 + rs))
 
-mfi_cur = mfi_calc(high, low, close, volume, lenMFI)
-
-// ========= OBV (custom) + z-score =========
+// OBV tích luỹ và z-score
 var float obv = 0.0
 obv += close > close[1] ?  volume :
        close < close[1] ? -volume : 0
@@ -57,61 +50,79 @@ obv_mean  = ta.sma(obv, zLenOBV)
 obv_stdev = ta.stdev(obv, zLenOBV)
 obv_z     = obv_stdev != 0 ? (obv - obv_mean) / obv_stdev : 0.0
 
-// ========= Trend filter =========
+// ========= Series + MTF =========
+cmf_cur  = cmf_calc(high, low, close, volume, lenCMF)
+cmf_fast = request.security(syminfo.tickerid, tfFast, cmf_calc(high, low, close, volume, lenCMF))
+cmf_slow = request.security(syminfo.tickerid, tfSlow, cmf_calc(high, low, close, volume, lenCMF))
+mfi_cur  = mfi_calc(high, low, close, volume, lenMFI)
+
 ema_trend   = ta.ema(close, lenEMA)
 in_uptrend  = close > ema_trend
 in_downtrend= close < ema_trend
 
-// ========= Futures data: OI + Funding =========
+// ========= OI/Funding =========
 oi_raw      = oiSymbol == ""      ? na : request.security(oiSymbol,      oiTf, close)
 funding_raw = fundingSymbol == "" ? na : request.security(fundingSymbol, oiTf, close)
 oi_mean  = na(oi_raw) ? na : ta.sma(oi_raw, 100)
 oi_sd    = na(oi_raw) ? na : ta.stdev(oi_raw, 100)
 oi_z     = na(oi_raw) or oi_sd == 0 ? na : (oi_raw - oi_mean) / oi_sd
 
-// ========= Bias & Exit conditions =========
+// ========= Bias & Exit =========
 longBias  = (cmf_cur > 0) and (cmf_fast > 0) and (cmf_slow > 0) and (mfi_cur > 50) and (obv_z > 0) and in_uptrend
 shortBias = (cmf_cur < 0) and (cmf_fast < 0) and (cmf_slow < 0) and (mfi_cur < 50) and (obv_z < 0) and in_downtrend
-
 exitLong  = (mfi_cur > 80) or (cmf_cur < 0) or (close < ema_trend)
 exitShort = (mfi_cur < 20) or (cmf_cur > 0) or (close > ema_trend)
 
-// ========= Plots =========
-hline(0.0,  "Zero",   color=color.gray, linestyle=hline.style_dotted)
-hline(80.0, "MFI 80", color=color.new(color.red,   70))
-hline(20.0, "MFI 20", color=color.new(color.teal,  70))
-hline(50.0, "MFI 50", color=color.new(color.orange,80))
+// ========= Lane system (fix chồng label) =========
+atr  = ta.atr(14)
+step = atr * 0.5  // tăng/giảm nếu vẫn chồng
 
-plot(cmf_cur,  "CMF (cur)", color=color.new(color.lime,   0), linewidth=2)
-plot(cmf_fast, "CMF 4H",    color=color.new(color.blue,  20), linewidth=2)
-plot(cmf_slow, "CMF 1D",    color=color.new(color.purple,20), linewidth=2)
-plot(mfi_cur,  "MFI",       color=color.new(color.orange, 0))
-plot(obv_z,    "OBV z",     color=color.new(color.yellow, 0))
+drawAbove(txt, col, lane) =>
+    label.new(bar_index, high + step * lane, txt, yloc=yloc.price, style=label.style_label_down, color=col, textcolor=color.black, size=size.small)
 
-plot(oi_z,       "OI z (norm.)", color=color.new(color.aqua, 0))
-plot(funding_raw,"Funding Rate", color=color.new(color.fuchsia, 0))
-hline(fundPosAlert, "Funding +th", color=color.new(color.fuchsia,70))
-hline(fundNegAlert, "Funding -th", color=color.new(color.fuchsia,70))
+drawBelow(txt, col, lane) =>
+    label.new(bar_index, low  - step * lane, txt, yloc=yloc.price, style=label.style_label_up, color=col, textcolor=color.black, size=size.small)
 
-bgcolor(longBias  ? color.new(color.lime, 85) : na)
-bgcolor(shortBias ? color.new(color.red,  85) : na)
-plotshape(longBias,  title="LONG bias",  style=shape.triangleup,   location=location.bottom, color=color.lime, size=size.tiny, text="LONG")
-plotshape(shortBias, title="SHORT bias", style=shape.triangledown, location=location.top,    color=color.red,  size=size.tiny, text="SHORT")
+// ========= Render labels theo lane =========
+fundHot   = not na(funding_raw) and funding_raw > fundPosAlert
+fundCold  = not na(funding_raw) and funding_raw < fundNegAlert
+cmfFlipDn = (cmf_cur < 0 and cmf_cur[1] >= 0)
+cmfFlipUp = (cmf_cur > 0 and cmf_cur[1] <= 0)
+obvFlipDn = (obv_z < 0 and obv_z[1] >= 0)
+obvFlipUp = (obv_z > 0 and obv_z[1] <= 0)
 
-// ========= Alerts =========
-alertcondition(longBias,  title="ENA Long Bias",  message="ENA: Long bias ON (Flow+Trend agree)")
-alertcondition(shortBias, title="ENA Short Bias", message="ENA: Short bias ON (Flow+Trend agree)")
-alertcondition(exitLong,  title="ENA Exit Long",  message="ENA: Exit Long conditions met")
-alertcondition(exitShort, title="ENA Exit Short", message="ENA: Exit Short conditions met")
+if barstate.isconfirmed
+    // Exit (lane 3)
+    if showExits and exitLong
+        drawAbove("Exit LONG", color.new(color.orange, 0), 3)
+    if showExits and exitShort
+        drawBelow("Exit SHORT", color.new(color.teal, 0),   3)
 
-oiRising    = oi_z > 0 and ta.rising(oi_z, 3)
-fundingHot  = not na(funding_raw) and funding_raw > fundPosAlert
-fundingCold = not na(funding_raw) and funding_raw < fundNegAlert
-alertcondition(oiRising,   title="OI rising (z>0)",          message="OI rising: new futures money flowing in")
-alertcondition(fundingHot, title="Funding too positive",      message="Funding > +threshold (crowded longs)")
-alertcondition(fundingCold,title="Funding too negative",      message="Funding < -threshold (crowded shorts)")
+    // Funding extremes (lane 2)
+    if showFunding and fundHot
+        drawAbove("⚠ Funding HIGH (crowded LONGs)", color.new(color.fuchsia, 0), 2)
+    if showFunding and fundCold
+        drawBelow("⚠ Funding LOW (crowded SHORTs)", color.new(color.fuchsia, 0), 2)
 
-// ========= Mini Dashboard (text đen) =========
+    // CMF flip (lane 1)
+    if showCMFflip and cmfFlipDn
+        drawAbove("⚠ CMF flip ↓ (flow out)", color.new(color.yellow, 0), 1)
+    if showCMFflip and cmfFlipUp
+        drawBelow("⚠ CMF flip ↑ (flow in)",  color.new(color.yellow, 0), 1)
+
+    // MFI extremes (lane 0)
+    if showMFIext and mfi_cur > 80
+        drawAbove("⚠ MFI > 80 (overbought)", color.new(color.red, 0), 0)
+    if showMFIext and mfi_cur < 20
+        drawBelow("⚠ MFI < 20 (oversold)",   color.new(color.teal,0), 0)
+
+    // OBV z flip (lane 0) — nếu còn trùng, tăng lên 1 hoặc 2
+    if showOBVflip and obvFlipDn
+        drawAbove("⚠ OBV z flip ↓", color.new(color.orange, 0), 2)
+    if showOBVflip and obvFlipUp
+        drawBelow("⚠ OBV z flip ↑", color.new(color.orange, 0), 2)
+
+// ========= Dashboard chữ đen (góc phải) =========
 var table dash = table.new(position.top_right, 2, 8, border_width=1)
 setCell(r, c, txt, col) =>
     table.cell(dash, c, r, txt, text_color=color.black, bgcolor=color.new(col, 0))
@@ -128,36 +139,11 @@ setCell(4,0,"OBV z",    color.white)
 setCell(4,1, str.tostring(obv_z,    format.mintick), obv_z>=0?color.lime:color.red)
 setCell(5,0,"Trend EMA",color.white)
 setCell(5,1, in_uptrend?"UP":"DOWN", in_uptrend?color.lime:color.red)
+setCell(6,0,"OI z",     color.white)
+setCell(6,1, oiSymbol==""? "n/a" : str.tostring(oi_z, format.mintick), na(oi_z)?color.gray:(oi_z>=0?color.lime:color.red))
+setCell(7,0,"Funding",  color.white)
+setCell(7,1, fundingSymbol==""? "n/a" : str.tostring(funding_raw, format.mintick), na(funding_raw)?color.gray:(funding_raw>=0?color.lime:color.red))
 
-// ========= Warning labels (text cảnh báo) =========
-var label warnLbl = na
-if showWarnings and barstate.isconfirmed
-    // Gom các cảnh báo thành một chuỗi nhiều dòng
-    string warnTxt = ""
-    if warnOnFunding and not na(funding_raw)
-        if fundingHot
-            warnTxt += "⚠ Funding HIGH (crowded LONGs)\n"
-        if fundingCold
-            warnTxt += "⚠ Funding LOW (crowded SHORTs)\n"
-    if warnOnCMFflip
-        if cmf_cur < 0 and cmf_cur[1] >= 0
-            warnTxt += "⚠ CMF flip ↓ (flow out)\n"
-        if cmf_cur > 0 and cmf_cur[1] <= 0
-            warnTxt += "⚠ CMF flip ↑ (flow in)\n"
-    if warnOnMFIext
-        if mfi_cur > 80
-            warnTxt += "⚠ MFI > 80 (overbought)\n"
-        if mfi_cur < 20
-            warnTxt += "⚠ MFI < 20 (oversold)\n"
-    if warnOnOBVflip
-        if obv_z < 0 and obv_z[1] >= 0
-            warnTxt += "⚠ OBV z flip ↓\n"
-        if obv_z > 0 and obv_z[1] <= 0
-            warnTxt += "⚠ OBV z flip ↑\n"
-
-    // Xóa label cũ rồi tạo label mới (đỡ rác chart)
-    if not na(warnLbl)
-        label.delete(warnLbl)
-    if str.length(warnTxt) > 0
-        // Vẽ trong panel indicator: y=0 là giữa trục (đủ nhìn), bạn có thể đổi sang 50 (trục MFI) tùy thích
-        warnLbl := label.new(bar_index, 0, text=warnTxt, style=label.style_label_left, color=color.new(color.yellow, 0), textcolor=color.black,size=size.small)
+// ========= Nền bias tổng hợp =========
+bgcolor(longBias  ? color.new(color.lime, 85) : na)
+bgcolor(shortBias ? color.new(color.red,  85) : na)
