@@ -1,0 +1,36 @@
+//@version=5
+indicator("CFI BUY SELL", shorttitle="CFI BUY SELL", overlay=true, timeframe="", timeframe_gaps=true)
+
+// ==== Inputs ====
+fastLen = input.int(3,  "Fast EMA", minval=1)
+slowLen = input.int(10, "Slow EMA", minval=2)
+rsiLen  = input.int(14, "RSI Len",  minval=2)
+showMAs = input.bool(false, "Show EMAs on chart")
+
+// ==== Core signals ====
+emaFast = ta.ema(close, fastLen)
+emaSlow = ta.ema(close, slowLen)
+rsi     = ta.rsi(close, rsiLen)
+
+// Cross + RSI confirmation
+buySig  = ta.crossover(emaFast, emaSlow) and rsi > 50
+sellSig = ta.crossunder(emaFast, emaSlow) and rsi < 50
+
+// Trend coloring (đơn giản & ít repaint)
+bullTrend = close > emaSlow and rsi > 50
+bearTrend = close < emaSlow and rsi < 50
+
+// ==== Plots ====
+blueCandle = color.new(color.rgb(85,177,255), 0)   // #55B1FF
+pinkCandle = color.new(color.rgb(255,77,166), 0)   // #FF4DA6
+barcolor(bullTrend ? blueCandle : bearTrend ? pinkCandle : na)
+
+plot(showMAs ? emaFast : na, "EMA Fast", color=color.new(color.teal, 40))
+plot(showMAs ? emaSlow : na, "EMA Slow", color=color.new(color.orange, 40))
+
+plotshape(buySig,  title="BUY",  style=shape.circle, size=size.tiny, color=color.lime,  text="BUY",  textcolor=color.black, location=location.belowbar, offset=0)
+plotshape(sellSig, title="SELL", style=shape.circle, size=size.tiny, color=color.red,   text="SELL", textcolor=color.white, location=location.abovebar, offset=0)
+
+// Alerts
+alertcondition(buySig,  title="BUY",  message="CFI BUY SELL: BUY signal")
+alertcondition(sellSig, title="SELL", message="CFI BUY SELL: SELL signal")

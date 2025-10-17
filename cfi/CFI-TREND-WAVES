@@ -1,0 +1,40 @@
+//@version=5
+indicator("CFI TREND WAVES", shorttitle="CFI TREND WAVES", overlay=false)
+
+// ==== Inputs ====
+chLen  = input.int(7,  "Channel Length", minval=1)   // trùng “7” như ảnh
+avgLen = input.int(30, "Average Length", minval=1)   // trùng “30” như ảnh
+src    = input.source(hlc3, "Source")
+obLvl  = input.int(60,  "Overbought")
+osLvl  = input.int(-60, "Oversold")
+showLines = input.bool(true, "Show WT lines")
+showHisto = input.bool(true, "Show Histogram columns")
+paintStrips = input.bool(true, "Background strips by regime")
+
+// ==== WaveTrend (biến thể phổ biến, ít nhiễu) ====
+// Công thức gần với LazyBear/Market Cipher WT1/WT2 (đã chỉnh nhẹ để mượt)
+esa = ta.ema(src, chLen)
+de  = ta.ema(math.abs(src - esa), chLen)
+ci  = (src - esa) / (0.015 * de)
+tci = ta.ema(ci, avgLen)
+
+wt1 = tci
+wt2 = ta.sma(wt1, 4)    // đường mượt hơn dùng để so sánh
+
+// ==== Histogram ====
+h = wt1 - wt2
+colH = h >= 0 ? color.new(color.blue, 0) : color.new(color.red, 0)
+plot(showHisto ? h : na, title="Histogram", style=plot.style_columns, linewidth=1, color=colH)
+
+// ==== Lines & Levels ====
+plot(showLines ? wt1 : na, "WT1", color=color.new(color.blue, 0))
+plot(showLines ? wt2 : na, "WT2", color=color.new(color.red, 0))
+hline(obLvl, "OB", color=color.new(color.red, 60))
+hline(osLvl, "OS", color=color.new(color.teal, 60))
+hline(0, "Zero", color=color.new(color.gray, 80))
+
+// ==== Regime background strips (tùy chọn) ====
+// Dải nền xanh khi wt2 dốc lên, đỏ khi dốc xuống
+slopeUp   = ta.change(wt2) > 0
+slopeDown = ta.change(wt2) < 0
+bgcolor(paintStrips ? (slopeUp ? color.new(color.blue, 92) : slopeDown ? color.new(color.red, 92) : na) : na)
