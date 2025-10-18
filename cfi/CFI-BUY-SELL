@@ -1,36 +1,46 @@
 //@version=5
-indicator("CFI BUY SELL", shorttitle="CFI BUY SELL", overlay=true, timeframe="", timeframe_gaps=true)
+indicator("CFI BUY SELL (Alerts with RSI/EMA placeholders)", shorttitle="CFI BUY SELL", overlay=true)
 
 // ==== Inputs ====
-fastLen = input.int(3,  "Fast EMA", minval=1)
-slowLen = input.int(10, "Slow EMA", minval=2)
-rsiLen  = input.int(14, "RSI Len",  minval=2)
-showMAs = input.bool(false, "Show EMAs on chart")
+fastLen       = input.int(3,  "Fast EMA", minval=1)
+slowLen       = input.int(10, "Slow EMA", minval=2)
+rsiLen        = input.int(14, "RSI Len",  minval=2)
+useRSIConfirm = input.bool(true, "Dùng RSI>50/<50 xác nhận")
+alertOnClose  = input.bool(true, "Chỉ alert khi nến đóng (no repaint)")
+showMAs       = input.bool(false, "Show EMAs on chart")
 
-// ==== Core signals ====
+// ==== Core ====
 emaFast = ta.ema(close, fastLen)
 emaSlow = ta.ema(close, slowLen)
 rsi     = ta.rsi(close, rsiLen)
 
-// Cross + RSI confirmation
-buySig  = ta.crossover(emaFast, emaSlow) and rsi > 50
-sellSig = ta.crossunder(emaFast, emaSlow) and rsi < 50
+baseBuy  = ta.crossover(emaFast, emaSlow) and (not useRSIConfirm or rsi > 50)
+baseSell = ta.crossunder(emaFast, emaSlow) and (not useRSIConfirm or rsi < 50)
+buySig   = baseBuy  and (alertOnClose ? barstate.isconfirmed : true)
+sellSig  = baseSell and (alertOnClose ? barstate.isconfirmed : true)
 
-// Trend coloring (đơn giản & ít repaint)
+// ==== Candle colors ====
 bullTrend = close > emaSlow and rsi > 50
 bearTrend = close < emaSlow and rsi < 50
+barcolor(bullTrend ? color.new(color.rgb(85,177,255), 0) : bearTrend ? color.new(color.rgb(255,77,166), 0) : na)
 
-// ==== Plots ====
-blueCandle = color.new(color.rgb(85,177,255), 0)   // #55B1FF
-pinkCandle = color.new(color.rgb(255,77,166), 0)   // #FF4DA6
-barcolor(bullTrend ? blueCandle : bearTrend ? pinkCandle : na)
+// ==== Show/Hide EMAs ====
+plot(showMAs ? emaFast : na, "EMA Fast (visible)", color=color.new(color.teal, 40))
+plot(showMAs ? emaSlow : na, "EMA Slow (visible)", color=color.new(color.orange, 40))
 
-plot(showMAs ? emaFast : na, "EMA Fast", color=color.new(color.teal, 40))
-plot(showMAs ? emaSlow : na, "EMA Slow", color=color.new(color.orange, 40))
+// ==== Hidden plots để nhúng vào alert message ====
+// CHÚ Ý: Tiêu đề phải CỐ ĐỊNH và khớp đúng trong placeholder.
+plot(rsi,     title="RSI_val",      display=display.none)
+plot(emaFast, title="EMA_fast_val", display=display.none)
+plot(emaSlow, title="EMA_slow_val", display=display.none)
+plot(close,   title="Price_val",    display=display.none)  // phòng khi muốn lấy giá qua {{plot("Price_val")}}
 
-plotshape(buySig,  title="BUY",  style=shape.circle, size=size.tiny, color=color.lime,  text="BUY",  textcolor=color.black, location=location.belowbar, offset=0)
-plotshape(sellSig, title="SELL", style=shape.circle, size=size.tiny, color=color.red,   text="SELL", textcolor=color.white, location=location.abovebar, offset=0)
+// ==== Markers ====
+plotshape(buySig,  title="BUY",  style=shape.circle, size=size.tiny, color=color.lime,  text="BUY",  textcolor=color.white, location=location.belowbar)
+plotshape(sellSig, title="SELL", style=shape.circle, size=size.tiny, color=color.red,   text="SELL", textcolor=color.white, location=location.abovebar)
 
-// Alerts
-alertcondition(buySig,  title="BUY",  message="CFI BUY SELL: BUY signal")
-alertcondition(sellSig, title="SELL", message="CFI BUY SELL: SELL signal")
+// ==== Alerts (const string + placeholder) ====
+// Dùng escape \" cho tên plot bên trong placeholder.
+alertcondition(buySig, title   = "BUY signal", message = "CFI BUY SELL: BUY on {{ticker}} {{interval}} @ {{close}} | RSI={{plot(\"RSI_val\")}} | EMA3={{plot(\"EMA_fast_val\")}} | EMA10={{plot(\"EMA_slow_val\")}}")
+
+alertcondition(sellSig, title   = "SELL signal", message = "CFI BUY SELL: SELL on {{ticker}} {{interval}} @ {{close}} | RSI={{plot(\"RSI_val\")}} | EMA3={{plot(\"EMA_fast_val\")}} | EMA10={{plot(\"EMA_slow_val\")}}")
